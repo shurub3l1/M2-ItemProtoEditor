@@ -75,6 +75,7 @@
   <div style="{{ t.legend }}">
     <span style="{{ t.legendItem }}"><span style="{{ t.legendDotSafe }}"></span>ASCII — always safe</span>
     <span style="{{ t.legendItem }}"><span style="{{ t.legendDotWarn }}">⚠</span>not encodable in {{ cpLabel }}</span>
+    <span style="{{ t.legendItem }}" title="Click: one item · Ctrl+click: add / remove · Shift+click: range · Ctrl+A: all shown · ↑ ↓ move (Shift: extend) · Del: delete the selection · Ctrl+Z: undo the delete · Esc: keep one">Ctrl / Shift+click · Del · Ctrl+Z</span>
   </div>
 
   <div style="{{ t.listWrap }}" class="ie-scroll" ref="{{ setList }}" onScroll="{{ onListScroll }}">
@@ -112,7 +113,10 @@
   </div>
 
   <div style="{{ t.footer }}">
-    <span style="{{ t.count }}">{{ shownCount }} / {{ totalCount }} items{{ dirtyLabel }}</span>
+    <span style="{{ t.count }}">{{ shownCount }} / {{ totalCount }} items{{ dirtyLabel }}{{ selLabel }}</span>
+    <sc-if value="{{ multi }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ onDeleteSel }}" style="{{ delSelStyle }}" title="Delete the selected items (Del)">Delete {{ selCount }}</button>
+    </sc-if>
     <button onClick="{{ onExport }}" style="{{ t.exportBtn }}">↓ Export</button>
   </div>
  </div>
@@ -171,7 +175,7 @@
         </sc-for>
       </div>
       <div style="{{ t.drawerFoot }}">
-        <button onClick="{{ onDelete }}" style="{{ t.delBtn }}">Delete</button>
+        <button onClick="{{ onDelete }}" style="{{ t.delBtn }}" title="Del">{{ delLabel }}</button>
         <button onClick="{{ onClone }}" style="{{ t.cloneBtn }}">Duplicate</button>
         <button onClick="{{ onClose }}" style="{{ t.doneBtn }}">Done</button>
       </div>
@@ -248,11 +252,11 @@ class Component extends DCLogic {
   static _seq = 0;
   static mkRow(o){ return {...Component.DEFAULTS,...o,_id:++Component._seq}; }
 
-  state = { rows: Component.SAMPLE.map(o=>Component.mkRow(o)), locale:'en', nameCp:'1252', search:'', typeFilter:'ALL', onlyMissing:false, editingId:null, exportMsg:'', dirty:false, wide:false, scrollY:0 };
+  state = { rows: Component.SAMPLE.map(o=>Component.mkRow(o)), locale:'en', nameCp:'1252', search:'', typeFilter:'ALL', onlyMissing:false, editingId:null, exportMsg:'', dirty:false, wide:false, scrollY:0, selected:{}, anchorId:null };
 
-  componentDidMount(){ this._measureList(); }
+  componentDidMount(){ this._measureList(); this._onKey=(e)=>this.onKey(e); window.addEventListener('keydown', this._onKey); }
   componentDidUpdate(){ this._measureList(); }
-  componentWillUnmount(){ if(this._ro) this._ro.disconnect(); if(this._sRaf!=null) cancelAnimationFrame(this._sRaf); }
+  componentWillUnmount(){ if(this._ro) this._ro.disconnect(); if(this._sRaf!=null) cancelAnimationFrame(this._sRaf); if(this._onKey) window.removeEventListener('keydown', this._onKey); }
 
   _measure(el){ if(el && el!==this._root){ this._root=el; if(this._ro) this._ro.disconnect(); this._ro=new ResizeObserver(es=>{ const w=es[0].contentRect.width; const wide=w>=800; if(wide!==this.state.wide) this.setState({wide}); }); this._ro.observe(el); } }
 
@@ -276,10 +280,10 @@ class Component extends DCLogic {
   onLoadNames(e){ const file=e.target.files&&e.target.files[0]; if(!file) return; const rd=new FileReader(); rd.onload=()=>this.parseNames(new Uint8Array(rd.result), file.name); rd.readAsArrayBuffer(file); e.target.value=''; }
   _splitLine(buf,start,end){ const fields=[]; let fs=start; for(let k=start;k<=end;k++){ if(k===end||buf[k]===9){ let fe=k; if(fe>fs && buf[fe-1]===13) fe--; fields.push([fs,fe]); fs=k+1; } } return fields; }
   _ascii(buf,a,b){ let s=''; for(let k=a;k<b;k++) s+=String.fromCharCode(buf[k]); return s.trim(); }
-  parseProto(buf, fname){ const rows=[]; let start=0, ln=0; for(let i=0;i<=buf.length;i++){ if(i===buf.length||buf[i]===10){ if(i>start+1||(i>start&&buf[start]!==13)){ if(ln>0){ const fl=this._splitLine(buf,start,i); if(fl.length>1 && (fl[0][1]>fl[0][0])){ const row=Component.mkRow(); row.vnum=this._ascii(buf,fl[0][0],fl[0][1]); const nb=[]; for(let k=fl[1][0];k<fl[1][1];k++) nb.push(buf[k]); row.bytes=nb.length?nb:null; row.nameK=null; for(let ci=2; ci<Component.COLS.length && ci<fl.length; ci++){ row[Component.COLS[ci]]=this._ascii(buf,fl[ci][0],fl[ci][1]); } if(row.vnum) rows.push(row); } } ln++; } start=i+1; } } if(!rows.length){ this.toast('No rows parsed — is this an item_proto.txt?'); return; } this._applyNames(rows); this.setState({rows, dirty:false, editingId:null, search:''}); this.toast('Loaded '+rows.length+' items from '+fname); }
+  parseProto(buf, fname){ const rows=[]; let start=0, ln=0; for(let i=0;i<=buf.length;i++){ if(i===buf.length||buf[i]===10){ if(i>start+1||(i>start&&buf[start]!==13)){ if(ln>0){ const fl=this._splitLine(buf,start,i); if(fl.length>1 && (fl[0][1]>fl[0][0])){ const row=Component.mkRow(); row.vnum=this._ascii(buf,fl[0][0],fl[0][1]); const nb=[]; for(let k=fl[1][0];k<fl[1][1];k++) nb.push(buf[k]); row.bytes=nb.length?nb:null; row.nameK=null; for(let ci=2; ci<Component.COLS.length && ci<fl.length; ci++){ row[Component.COLS[ci]]=this._ascii(buf,fl[ci][0],fl[ci][1]); } if(row.vnum) rows.push(row); } } ln++; } start=i+1; } } if(!rows.length){ this.toast('No rows parsed — is this an item_proto.txt?'); return; } this._applyNames(rows); this._undo=[]; this.setState({rows, dirty:false, editingId:null, search:'', selected:{}, anchorId:null}); this.toast('Loaded '+rows.length+' items from '+fname); }
   parseNames(buf, fname){ const map={}; let start=0, ln=0, n=0; for(let i=0;i<=buf.length;i++){ if(i===buf.length||buf[i]===10){ if(i>start){ if(ln>0){ const fl=this._splitLine(buf,start,i); if(fl.length>=2){ const vn=this._ascii(buf,fl[0][0],fl[0][1]); const lb=[]; for(let k=fl[1][0];k<fl[1][1];k++) lb.push(buf[k]); if(vn){ map[vn]=lb; n++; } } } ln++; } start=i+1; } } this._namesMap=map; this.setState(s=>({ rows: s.rows.map(r=>{ const k=String(r.vnum).split('~')[0].trim(); return map[k]!=null ? {...r, localeBytes:map[k], locale:null} : r; }) })); this.toast('Loaded '+n+' locale names from '+fname); }
   _applyNames(rows){ const map=this._namesMap; if(!map) return; rows.forEach(r=>{ const k=String(r.vnum).split('~')[0].trim(); if(map[k]!=null){ r.localeBytes=map[k]; r.locale=null; } }); /* Korvath2: ranges 'A~B' use start vnum */ }
-  loadSample(){ this._namesMap=null; this.setState({ rows: Component.SAMPLE.map(o=>Component.mkRow(o)), dirty:false, editingId:null, search:'' }); this.toast('Restored sample data'); }
+  loadSample(){ this._namesMap=null; this._undo=[]; this.setState({ rows: Component.SAMPLE.map(o=>Component.mkRow(o)), dirty:false, editingId:null, search:'', selected:{}, anchorId:null }); this.toast('Restored sample data'); }
 
   filtered(){ const {rows,search,typeFilter,onlyMissing,locale,nameCp}=this.state; const key=search+'|'+typeFilter+'|'+onlyMissing+'|'+locale+'|'+nameCp; if(this._fRows===rows && this._fKey===key) return this._fCache; const q=search.trim().toLowerCase(); const range=q.match(/^(\d+)\s*-\s*(\d+)$/); const out=rows.filter(r=>{ if(typeFilter!=='ALL' && r.type!==typeFilter) return false; if(onlyMissing && !this.isMissing(r)) return false; if(!q) return true; if(range){ const n=parseInt(r.vnum,10); return n>=+range[1] && n<=+range[2]; } return r.vnum.toLowerCase().includes(q) || this.nameOf(r).toLowerCase().includes(q) || this.localeOf(r).toLowerCase().includes(q); }); this._fRows=rows; this._fKey=key; this._fCache=out; return out; }
   typeOpts(){ const rows=this.state.rows; if(this._toRows===rows) return this._toCache; const o=['ALL',...Array.from(new Set(rows.map(r=>r.type)))]; this._toRows=rows; this._toCache=o; return o; }
@@ -291,9 +295,76 @@ class Component extends DCLogic {
   static formatFlags(bits,opts,unknown){ bits=bits>>>0; const known=opts.length>=32?0xFFFFFFFF:((1<<opts.length)>>>0)-1; if(bits&~known) return String(bits>>>0); const names=opts.filter((o,i)=>bits&(1<<i)); const all=names.concat(unknown||[]); return all.length?all.join(' | '):'NONE'; }
   toggleFlag(id,key,opt){ this.setState(s=>({ dirty:true, rows:s.rows.map(r=>{ if(r._id!==id) return r; const opts=Component.FIELD[key].options||[]; const {bits,unknown}=Component.parseFlags(r[key],opts); const i=opts.indexOf(opt); if(i<0) return r; const nb=(bits^(1<<i))>>>0; return {...r,[key]:Component.formatFlags(nb,opts,unknown)}; }) })); }
   nextVnum(){ const m=this.state.rows.reduce((a,r)=>Math.max(a, parseInt(r.vnum,10)||0),0); return String(m+1); }
-  add(){ const row=Component.mkRow({vnum:this.nextVnum(),type:'ITEM_WEAPON'}); this.setState(s=>({ dirty:true, editingId:row._id, rows:[row, ...s.rows] })); }
-  clone(){ const src=this.state.rows.find(r=>r._id===this.state.editingId); if(!src) return; const row=Component.mkRow({...src,vnum:this.nextVnum()}); const i=this.state.rows.indexOf(src); this.setState(s=>{ const rows=s.rows.slice(); rows.splice(i+1,0,row); return {dirty:true,editingId:row._id,rows}; }); }
-  del(){ const id=this.state.editingId; this.setState(s=>({dirty:true,editingId:null,rows:s.rows.filter(r=>r._id!==id)})); }
+  add(){ const row=Component.mkRow({vnum:this.nextVnum(),type:'ITEM_WEAPON'}); this.setState(s=>({ dirty:true, editingId:row._id, selected:{[row._id]:true}, anchorId:row._id, rows:[row, ...s.rows] })); }
+  clone(){ const src=this.state.rows.find(r=>r._id===this.state.editingId); if(!src) return; const row=Component.mkRow({...src,vnum:this.nextVnum()}); const i=this.state.rows.indexOf(src); this.setState(s=>{ const rows=s.rows.slice(); rows.splice(i+1,0,row); return {dirty:true,editingId:row._id,selected:{[row._id]:true},anchorId:row._id,rows}; }); }
+  del(){ this.delSelected(); }
+
+  // -- multiple selection (Korvath2, 2026-11-23). Click = one item, Ctrl/Cmd+click = add / remove, Shift+click = range
+  //    (Ctrl+Shift adds the range), Ctrl+A = every item the filter shows, arrows move (Shift extends), Del deletes the
+  //    selection and moves to the next item, Ctrl+Z undoes the last deletes, Esc keeps only the open item.
+  //    The selection counts only the items the current filter shows; keys typed in a field are left to the field.
+  selIds(){ const sel=this.state.selected||{}; return this.filtered().filter(r=>sel[r._id]).map(r=>r._id); }
+  pick(r, e){
+    const rows=this.filtered(); const sel=this.state.selected||{};
+    const add=!!(e && (e.ctrlKey||e.metaKey)), range=!!(e && e.shiftKey);
+    if(range && this.state.anchorId!=null){
+      const a=rows.findIndex(x=>x._id===this.state.anchorId), b=rows.findIndex(x=>x._id===r._id);
+      if(a>=0 && b>=0){ const next=add?{...sel}:{}; for(let i=Math.min(a,b);i<=Math.max(a,b);i++) next[rows[i]._id]=true; this.setState({selected:next, editingId:r._id}); return; }
+    }
+    if(add){
+      const next={...sel}; let editingId=this.state.editingId;
+      if(next[r._id]){ delete next[r._id]; if(editingId===r._id){ const rest=rows.filter(x=>next[x._id]); editingId=rest.length?rest[rest.length-1]._id:null; } }
+      else { next[r._id]=true; editingId=r._id; }
+      this.setState({selected:next, anchorId:r._id, editingId}); return;
+    }
+    this.setState({selected:{[r._id]:true}, anchorId:r._id, editingId:r._id});
+  }
+  delSelected(){
+    let ids=this.selIds(); if(!ids.length && this.state.editingId!=null) ids=[this.state.editingId];
+    if(!ids.length) return;
+    const gone={}; ids.forEach(id=>gone[id]=true);
+    // the item after the last one deleted (in the order shown) becomes the open one: Del again goes on down the list
+    const shown=this.filtered(); let last=-1; shown.forEach((r,i)=>{ if(gone[r._id]) last=i; });
+    let next=null; for(let i=last+1;i<shown.length && !next;i++) if(!gone[shown[i]._id]) next=shown[i];
+    for(let i=last-1;i>=0 && !next;i--) if(!gone[shown[i]._id]) next=shown[i];
+    const before=this.state.rows, after=before.filter(r=>!gone[r._id]);
+    if(!this._undo) this._undo=[];
+    this._undo.push({before, after, count:ids.length, dirty:this.state.dirty}); if(this._undo.length>50) this._undo.shift();
+    this.setState({rows:after, dirty:true, selected:next?{[next._id]:true}:{}, anchorId:next?next._id:null, editingId:next?next._id:null});
+    this.toast((ids.length===1?'Deleted 1 item':'Deleted '+ids.length+' items')+' · Ctrl+Z to undo');
+  }
+  undoDelete(){
+    const u=this._undo&&this._undo.length?this._undo[this._undo.length-1]:null; if(!u) return;
+    if(this.state.rows!==u.after){ this._undo=[]; this.toast('Nothing to undo: the list changed after the delete'); return; }
+    this._undo.pop();
+    this.setState({rows:u.before, dirty:u.dirty || this._undo.length>0, selected:{}, anchorId:null, editingId:null});
+    this.toast('Restored '+u.count+(u.count===1?' item':' items'));
+  }
+  onKey(e){
+    const t=e.target, tag=t&&t.tagName;
+    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable)) return;
+    const ctrl=e.ctrlKey||e.metaKey;
+    if(e.key==='Delete'){ e.preventDefault(); if(!e.repeat) this.delSelected(); return; }
+    if(ctrl && (e.key==='a'||e.key==='A')){ e.preventDefault(); const rows=this.filtered(); const sel={}; rows.forEach(r=>sel[r._id]=true); this.setState({selected:sel, anchorId:rows.length?rows[0]._id:null, editingId:this.state.editingId!=null&&sel[this.state.editingId]?this.state.editingId:(rows.length?rows[0]._id:null)}); return; }
+    if(ctrl && (e.key==='z'||e.key==='Z')){ e.preventDefault(); this.undoDelete(); return; }
+    if(e.key==='Escape'){ if(this.selIds().length>1){ e.preventDefault(); this.setState({selected:this.state.editingId!=null?{[this.state.editingId]:true}:{}}); } return; }
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){ e.preventDefault(); this.moveCursor(e.key==='ArrowDown'?1:-1, e.shiftKey); }
+  }
+  moveCursor(step, extend){
+    const rows=this.filtered(); if(!rows.length) return;
+    let i=rows.findIndex(r=>r._id===this.state.editingId);
+    i = i<0 ? (step>0?0:rows.length-1) : Math.max(0, Math.min(rows.length-1, i+step));
+    const r=rows[i];
+    if(extend && this.state.anchorId!=null) this.pick(r, {shiftKey:true});
+    else this.setState({selected:{[r._id]:true}, anchorId:r._id, editingId:r._id});
+    this._scrollToIndex(i);
+  }
+  _scrollToIndex(i){
+    const el=this._list; if(!el) return; const h=this._estRowH();
+    const head=this._padT ? this._padT.getBoundingClientRect().top-el.getBoundingClientRect().top+el.scrollTop-this._padT.offsetHeight : 0;
+    const top=head+i*h, bottom=top+h;
+    if(top<el.scrollTop+head) el.scrollTop=Math.max(0, top-head); else if(bottom>el.scrollTop+el.clientHeight) el.scrollTop=bottom-el.clientHeight;
+  }
   toast(msg){ this.setState({exportMsg:msg}); clearTimeout(this._tt); this._tt=setTimeout(()=>this.setState({exportMsg:''}),3600); }
 
   _encField(str, cp, tally){ const o=[]; for(const ch of String(str)){ const c=ch.codePointAt(0); if(c<128){ o.push(c); } else if(c<256){ o.push(c); } else { tally.bad++; for(const b of new TextEncoder().encode(ch)) o.push(b); } } return o; }
@@ -440,14 +511,16 @@ class Component extends DCLogic {
     const winStart=Math.min(Math.max(0, Math.floor(this.state.scrollY/rowH)-over), Math.max(0,N-1));
     const winCount=Math.max(0, Math.min(N-winStart, Math.ceil(viewH/rowH)+over*2));
     this._winStart=winStart; this._sliceLen=winCount;
-    const editingId=this.state.editingId;
+    const editingId=this.state.editingId; const sel=this.state.selected||{};
     const visibleRows=rows.slice(winStart,winStart+winCount).map((r,j)=>{
       const idxAbs=winStart+j;
       const acc=this.typeColor(r.type);
       const badgeStyle={font:'700 9.5px '+t._flags.mono,color:acc,background:this._alpha(acc,.15),border:'1px solid '+this._alpha(acc,.4),padding:'3px 7px',borderRadius:'5px',textAlign:'center',justifySelf: f.listVariant==='table'?'center':'auto',whiteSpace:'nowrap'};
       const missing=this.isMissing(r); const localeStr=this.localeOf(r);
       let style=this.rowStyle(t,r,idxAbs);
+      style={...style, userSelect:'none'};
       if(r._id===editingId) style={...style, background:this._alpha(f.A,.16), boxShadow:'inset 3px 0 0 '+f.A};
+      else if(sel[r._id]) style={...style, background:this._alpha(f.A,.09), boxShadow:'inset 3px 0 0 '+this._alpha(f.A,.55)};
       return {
         vnum:r.vnum, idx:String(idxAbs+1).padStart(2,'0'),
         primary: missing? '⌀ untranslated' : localeStr,
@@ -459,11 +532,12 @@ class Component extends DCLogic {
         typeShort:this.short(r.type), badgeStyle,
         goldLabel:this.fmtGold(r.gold),
         style,
-        onClick:()=>this.setState({editingId:r._id})
+        onClick:(e)=>this.pick(r,e)
       };
     });
 
     const editRow=editingId!=null? this.state.rows.find(r=>r._id===editingId):null;
+    const selCount=this.selIds().length;
     const inputStyle=t.input; const A=t._flags.A;
     const chip=(on)=>({font:'600 10px '+f.mono,padding:'5px 9px',borderRadius:f.rad+'px',cursor:'pointer',whiteSpace:'nowrap',border:'1px solid '+(on?A:f.bd),background:on?this._alpha(A,.16):f.panel2,color:on?A:f.dim});
     const editGroups= editRow? Component.GROUPS.map(g=>({ title:g.title, fields:g.keys.map(k=>{
@@ -512,7 +586,11 @@ class Component extends DCLogic {
       setRoot:(el)=>this._measure(el),
       wide, showPanel: wide || !!editRow, showOverlay: !wide && !!editRow, panelEmpty: wide && !editRow, closeLabel: wide ? '✕ Close' : '✕',
       editing:!!editRow, editVnum:editRow?editRow.vnum:'', editName:editRow?(this.localeOf(editRow)||this.nameOf(editRow)||'New item'):'',
-      editGroups, onClose:()=>this.setState({editingId:null}), onDelete:()=>this.del(), onClone:()=>this.clone()
+      editGroups, onClose:()=>this.setState({editingId:null}), onDelete:()=>this.delSelected(), onClone:()=>this.clone(),
+      selCount, multi:selCount>1, selLabel:selCount>1?' · '+selCount+' selected':'',
+      delLabel: selCount>1 && sel[editingId] ? 'Delete '+selCount : 'Delete',
+      onDeleteSel:()=>this.delSelected(),
+      delSelStyle:{...t.delBtn, marginLeft:'auto', marginRight:'8px'}
     };
   }
 }

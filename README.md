@@ -35,6 +35,15 @@ CDN, so it needs internet once).
   input.
 - **+ New** creates an item at `max(vnum)+1`. **Duplicate** clones the open
   item to a new vnum. **Delete** removes it.
+- **Several items at once** (Korvath2): Ctrl/Cmd+click adds or removes an item,
+  Shift+click selects a range (Ctrl+Shift+click adds the range), Ctrl+A selects
+  every item the current search / type filter shows, ↑ ↓ move (Shift+↑ ↓
+  extends). The footer shows the count and a **Delete N** button.
+- **Del** deletes the selection (or the open item) and opens the next one, so
+  pressing Del again goes on down the list; holding the key does not repeat.
+  **Ctrl+Z** undoes the last deletes (up to 50, as long as nothing else was
+  edited since). **Esc** keeps only the open item selected. Keys typed in a
+  field (search, inputs) are left to the field.
 
 ### Names, charsets, and byte preservation
 
